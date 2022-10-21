@@ -183,3 +183,56 @@ class Conv2dSame(nn.Conv2d):
         out = F.conv2d(x, self.weight, self.bias, self.stride,
                        self.padding, self.dilation, self.groups)
         return out
+
+
+class BridgeModule(nn.Module):
+    def __init__(self, hidden_dim, bridge_type="hadamard_product"):
+        super(BridgeModule, self).__init__()
+        assert bridge_type in ["hadamard_product", "pointwise_addition", "concatenation", "attention_pooling"], \
+            "bridge_type={} is not supported.".format(bridge_type)
+        self.bridge_type = bridge_type
+        if bridge_type == "concatenation":
+            self.concat_pooling = nn.Sequential(nn.Linear(hidden_dim * 2, hidden_dim),
+                                                nn.ReLU())
+        elif bridge_type == "attention_pooling":
+            self.attention1 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
+                                            nn.ReLU(),
+                                            nn.Linear(hidden_dim, hidden_dim, bias=False),
+                                            nn.Softmax(dim=-1))
+            self.attention2 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
+                                            nn.ReLU(),
+                                            nn.Linear(hidden_dim, hidden_dim, bias=False),
+                                            nn.Softmax(dim=-1))
+
+    def forward(self, X1, X2):
+        out = None
+        if self.bridge_type == "hadamard_product":
+            out = X1 * X2
+        elif self.bridge_type == "pointwise_addition":
+            out = X1 + X2
+        elif self.bridge_type == "concatenation":
+            out = self.concat_pooling(torch.cat([X1, X2], dim=-1))
+        elif self.bridge_type == "attention_pooling":
+            out = self.attention1(X1) * X1 + self.attention1(X2) * X2
+        return out
+
+
+class RegulationModule(nn.Module):
+    def __init__(self, num_fields, embedding_dim, tau=1, use_bn=False):
+        super(RegulationModule, self).__init__()
+        self.tau = tau
+        self.embedding_dim = embedding_dim
+        self.use_bn = use_bn
+        self.g1 = nn.Parameter(torch.ones(num_fields))
+        self.g2 = nn.Parameter(torch.ones(num_fields))
+        if self.use_bn:
+            self.bn1 = nn.BatchNorm1d(num_fields * embedding_dim)
+            self.bn2 = nn.BatchNorm1d(num_fields * embedding_dim)
+
+    def forward(self, X):
+        g1 = (self.g1 / self.tau).softmax(dim=-1).unsqueeze(-1).repeat(1, self.embedding_dim).view(1, -1)
+        g2 = (self.g2 / self.tau).softmax(dim=-1).unsqueeze(-1).repeat(1, self.embedding_dim).view(1, -1)
+        out1, out2 = g1 * X, g2 * X
+        if self.use_bn:
+            out1, out2 = self.bn1(out1), self.bn2(out2)
+        return out1, out2

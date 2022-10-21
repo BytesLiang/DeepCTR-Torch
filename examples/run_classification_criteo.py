@@ -3,14 +3,14 @@ import pandas as pd
 import torch
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, KBinsDiscretizer
 
 from deepctr_torch.inputs import SparseFeat, DenseFeat, get_feature_names
 from deepctr_torch.models import *
 
 if __name__ == "__main__":
-    data = pd.read_csv('./criteo_sample.txt')
-
+    # data = pd.read_csv('./criteo_sample.txt')
+    data = pd.read_csv('../dataset/criteo_sampled_data.csv')
     sparse_features = ['C' + str(i) for i in range(1, 27)]
     dense_features = ['I' + str(i) for i in range(1, 14)]
 
@@ -22,15 +22,24 @@ if __name__ == "__main__":
     for feat in sparse_features:
         lbe = LabelEncoder()
         data[feat] = lbe.fit_transform(data[feat])
-    mms = MinMaxScaler(feature_range=(0, 1))
-    data[dense_features] = mms.fit_transform(data[dense_features])
+
+
+    # mms = MinMaxScaler(feature_range=(0, 1))
+    # data[dense_features] = mms.fit_transform(data[dense_features])
+    for feat in dense_features:
+        est = KBinsDiscretizer(n_bins=20, encode="ordinal", strategy="kmeans")
+        data[feat] = est.fit_transform(data[feat].values.reshape(-1, 1))
+        lbe = LabelEncoder()
+        data[feat] = lbe.fit_transform(data[feat])
 
     # 2.count #unique features for each sparse field,and record dense feature field name
 
-    fixlen_feature_columns = [SparseFeat(feat, data[feat].nunique())
-                              for feat in sparse_features] + [DenseFeat(feat, 1, )
+    # fixlen_feature_columns = [SparseFeat(feat, data[feat].nunique())
+    #                           for feat in sparse_features] + [DenseFeat(feat, 1, )
+    #                                                           for feat in dense_features]
+    fixlen_feature_columns = [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
+                              for feat in sparse_features] + [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
                                                               for feat in dense_features]
-
     dnn_feature_columns = fixlen_feature_columns
     linear_feature_columns = fixlen_feature_columns
 
@@ -51,14 +60,17 @@ if __name__ == "__main__":
         print('cuda ready...')
         device = 'cuda:0'
 
-    model = DeepFM(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
-                   task='binary',
-                   l2_reg_embedding=1e-5, device=device)
+    # model = DeepFM(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
+    #                task='binary',
+    #                l2_reg_embedding=1e-5, device=device)
+    model = EDCN(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
+                task='binary', dnn_dropout=0,
+                l2_reg_embedding=1e-5, device=device)
 
     model.compile("adagrad", "binary_crossentropy",
                   metrics=["binary_crossentropy", "auc"], )
 
-    history = model.fit(train_model_input, train[target].values, batch_size=32, epochs=10, verbose=2,
+    history = model.fit(train_model_input, train[target].values, batch_size=256, epochs=1, verbose=2,
                         validation_split=0.2)
     pred_ans = model.predict(test_model_input, 256)
     print("")

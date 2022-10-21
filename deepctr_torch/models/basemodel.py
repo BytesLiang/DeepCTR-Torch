@@ -379,7 +379,6 @@ class BaseModel(nn.Module):
             feature_columns) else []
         dense_feature_columns = list(
             filter(lambda x: isinstance(x, DenseFeat), feature_columns)) if len(feature_columns) else []
-
         dense_input_dim = sum(
             map(lambda x: x.dimension, dense_feature_columns))
         if feature_group:

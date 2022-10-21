@@ -51,19 +51,20 @@ class DCN(BaseModel):
                                   init_std=init_std, seed=seed, task=task, device=device, gpus=gpus)
         self.dnn_hidden_units = dnn_hidden_units
         self.cross_num = cross_num
-        self.dnn = DNN(self.compute_input_dim(dnn_feature_columns), dnn_hidden_units,
+        input_dim = self.compute_input_dim(dnn_feature_columns, include_dense=False)
+        self.dnn = DNN(input_dim, dnn_hidden_units,
                        activation=dnn_activation, use_bn=dnn_use_bn, l2_reg=l2_reg_dnn, dropout_rate=dnn_dropout,
                        init_std=init_std, device=device)
         if len(self.dnn_hidden_units) > 0 and self.cross_num > 0:
-            dnn_linear_in_feature = self.compute_input_dim(dnn_feature_columns) + dnn_hidden_units[-1]
+            dnn_linear_in_feature = input_dim + dnn_hidden_units[-1]
         elif len(self.dnn_hidden_units) > 0:
             dnn_linear_in_feature = dnn_hidden_units[-1]
         elif self.cross_num > 0:
-            dnn_linear_in_feature = self.compute_input_dim(dnn_feature_columns)
+            dnn_linear_in_feature = input_dim
 
         self.dnn_linear = nn.Linear(dnn_linear_in_feature, 1, bias=False).to(
             device)
-        self.crossnet = CrossNet(in_features=self.compute_input_dim(dnn_feature_columns),
+        self.crossnet = CrossNet(in_features=input_dim,
                                  layer_num=cross_num, parameterization=cross_parameterization, device=device)
         self.add_regularization_weight(
             filter(lambda x: 'weight' in x[0] and 'bn' not in x[0], self.dnn.named_parameters()), l2=l2_reg_dnn)
@@ -77,8 +78,8 @@ class DCN(BaseModel):
         sparse_embedding_list, dense_value_list = self.input_from_feature_columns(X, self.dnn_feature_columns,
                                                                                   self.embedding_dict)
 
-        dnn_input = combined_dnn_input(sparse_embedding_list, dense_value_list)
-
+        # dnn_input = combined_dnn_input(sparse_embedding_list, dense_value_list)
+        dnn_input = combined_dnn_input(sparse_embedding_list, [])
         if len(self.dnn_hidden_units) > 0 and self.cross_num > 0:  # Deep & Cross
             deep_out = self.dnn(dnn_input)
             cross_out = self.crossnet(dnn_input)
