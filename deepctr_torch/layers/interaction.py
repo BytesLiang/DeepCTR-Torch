@@ -4,9 +4,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..layers.activation import activation_layer
-from ..layers.core import Conv2dSame
-from ..layers.sequence import KMaxPooling
+from .activation import activation_layer
+from .core import Conv2dSame
+from .sequence import KMaxPooling
 
 
 class FM(nn.Module):
@@ -25,7 +25,6 @@ class FM(nn.Module):
 
     def forward(self, inputs):
         fm_input = inputs
-
         square_of_sum = torch.pow(torch.sum(fm_input, dim=1, keepdim=True), 2)
         sum_of_square = torch.sum(fm_input * fm_input, dim=1, keepdim=True)
         cross_term = square_of_sum - sum_of_square
@@ -810,3 +809,89 @@ class LogTransformLayer(nn.Module):
         ltl_result = self.bn[1](ltl_result)
         ltl_result = torch.flatten(ltl_result, start_dim=1)
         return ltl_result
+
+
+class BridgeModule(nn.Module):
+    def __init__(self, hidden_dim, bridge_type="hadamard_product"):
+        super(BridgeModule, self).__init__()
+        assert bridge_type in ["hadamard_product", "pointwise_addition", "concatenation", "attention_pooling"], \
+            "bridge_type={} is not supported.".format(bridge_type)
+        self.bridge_type = bridge_type
+        if bridge_type == "concatenation":
+            self.concat_pooling = nn.Sequential(nn.Linear(hidden_dim * 2, hidden_dim),
+                                                nn.ReLU())
+        elif bridge_type == "attention_pooling":
+            self.attention1 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
+                                            nn.ReLU(),
+                                            nn.Linear(hidden_dim, hidden_dim, bias=False),
+                                            nn.Softmax(dim=-1))
+            self.attention2 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
+                                            nn.ReLU(),
+                                            nn.Linear(hidden_dim, hidden_dim, bias=False),
+                                            nn.Softmax(dim=-1))
+
+    def forward(self, X1, X2):
+        out = None
+        if self.bridge_type == "hadamard_product":
+            out = X1 * X2
+        elif self.bridge_type == "pointwise_addition":
+            out = X1 + X2
+        elif self.bridge_type == "concatenation":
+            out = self.concat_pooling(torch.cat([X1, X2], dim=-1))
+        elif self.bridge_type == "attention_pooling":
+            out = self.attention1(X1) * X1 + self.attention1(X2) * X2
+        return out
+
+
+class RegulationModule(nn.Module):
+    def __init__(self, num_fields, embedding_dim, tau=1, use_bn=False):
+        super(RegulationModule, self).__init__()
+        self.tau = tau
+        self.embedding_dim = embedding_dim
+        self.use_bn = use_bn
+        self.g1 = nn.Parameter(torch.ones(num_fields))
+        self.g2 = nn.Parameter(torch.ones(num_fields))
+        if self.use_bn:
+            self.bn1 = nn.BatchNorm1d(num_fields * embedding_dim)
+            self.bn2 = nn.BatchNorm1d(num_fields * embedding_dim)
+
+    def forward(self, X):
+        g1 = (self.g1 / self.tau).softmax(dim=-1).unsqueeze(-1).repeat(1, self.embedding_dim).view(1, -1)
+        g2 = (self.g2 / self.tau).softmax(dim=-1).unsqueeze(-1).repeat(1, self.embedding_dim).view(1, -1)
+        out1, out2 = g1 * X, g2 * X
+        if self.use_bn:
+            out1, out2 = self.bn1(out1), self.bn2(out2)
+        return out1, out2
+
+
+class AutoDisLayer(nn.Module):
+    def __init__(self, field_num, embedding_dim=10, H=20, alpha=0.1, tau=1, use_bn=False):
+        super(AutoDisLayer, self).__init__()
+        self.field_num = field_num
+        self.use_bn = use_bn
+        self.auto_dis = nn.ModuleList([AutomaticDiscretization(H, alpha, tau, use_bn)
+                                       for _ in range(field_num)])
+        self.ME = nn.Parameter(torch.randn(field_num, H, embedding_dim))
+
+    def forward(self, x):
+        emb_list = [torch.matmul(self.auto_dis[i](x[:, i]), self.ME[i]) for i in range(self.field_num)]
+        emb = torch.cat(emb_list, dim=-1)
+        return emb
+
+
+class AutomaticDiscretization(nn.Module):
+    def __init__(self, H=20, alpha=0.1, tau=1, use_bn=False):
+        super(AutomaticDiscretization, self).__init__()
+        self.tau = tau
+        self.use_bn = use_bn
+        self.w_h = nn.Linear(1, H)
+        self.w_dis = nn.Linear(H, H)
+        self.leak_relu = nn.LeakyReLU()
+        self.alpha = alpha
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        h = self.leak_relu(self.w_h(x))
+        x_hat = self.w_dis(h) + self.alpha * h
+        x_hat_h = self.softmax(x_hat / self.tau)
+        return x_hat_h

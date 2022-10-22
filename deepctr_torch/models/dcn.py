@@ -14,7 +14,7 @@ import torch.nn as nn
 
 from .basemodel import BaseModel
 from ..inputs import combined_dnn_input
-from ..layers import CrossNet, DNN
+from ..layers import CrossNet, DNN, AutoDisLayer
 
 
 class DCN(BaseModel):
@@ -42,16 +42,20 @@ class DCN(BaseModel):
     """
 
     def __init__(self, linear_feature_columns, dnn_feature_columns, cross_num=2, cross_parameterization='vector',
-                 dnn_hidden_units=(128, 128), l2_reg_linear=0.00001, l2_reg_embedding=0.00001, l2_reg_cross=0.00001,
-                 l2_reg_dnn=0, init_std=0.0001, seed=1024, dnn_dropout=0, dnn_activation='relu', dnn_use_bn=False,
-                 task='binary', device='cpu', gpus=None):
+                 dense_embedding="auto_dis", dnn_hidden_units=(128, 128), l2_reg_linear=0.00001,
+                 l2_reg_embedding=0.00001, l2_reg_cross=0.00001, l2_reg_dnn=0, init_std=0.0001, seed=1024,
+                 dnn_dropout=0, dnn_activation='relu', dnn_use_bn=False, task='binary', device='cpu', gpus=None):
 
         super(DCN, self).__init__(linear_feature_columns=linear_feature_columns,
-                                  dnn_feature_columns=dnn_feature_columns, l2_reg_embedding=l2_reg_embedding,
+                                  dnn_feature_columns=dnn_feature_columns,
+                                  l2_reg_embedding=l2_reg_embedding,
                                   init_std=init_std, seed=seed, task=task, device=device, gpus=gpus)
+        self.dense_embedding = dense_embedding
+        if self.dense_embedding == "auto_dis":
+            self.auto_dis_layer = AutoDisLayer(13, 10, H=20, alpha=0.1, tau=1)
         self.dnn_hidden_units = dnn_hidden_units
         self.cross_num = cross_num
-        input_dim = self.compute_input_dim(dnn_feature_columns, include_dense=False)
+        input_dim = self.compute_input_dim(dnn_feature_columns)
         self.dnn = DNN(input_dim, dnn_hidden_units,
                        activation=dnn_activation, use_bn=dnn_use_bn, l2_reg=l2_reg_dnn, dropout_rate=dnn_dropout,
                        init_std=init_std, device=device)
@@ -80,6 +84,8 @@ class DCN(BaseModel):
 
         # dnn_input = combined_dnn_input(sparse_embedding_list, dense_value_list)
         dnn_input = combined_dnn_input(sparse_embedding_list, [])
+        dense_embedding_list = self.auto_dis_layer(torch.stack(dense_value_list, dim=1))
+        dnn_input = torch.cat((dnn_input, dense_embedding_list), dim=1)
         if len(self.dnn_hidden_units) > 0 and self.cross_num > 0:  # Deep & Cross
             deep_out = self.dnn(dnn_input)
             cross_out = self.crossnet(dnn_input)

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import PackedSequence
 
-from ..layers.core import LocalActivationUnit
+from .core import LocalActivationUnit
 
 
 class SequencePoolingLayer(nn.Module):
