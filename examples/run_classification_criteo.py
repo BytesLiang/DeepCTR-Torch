@@ -27,10 +27,14 @@ if __name__ == "__main__":
 
     # 2.count #unique features for each sparse field,and record dense feature field name
 
+    # fixlen_feature_columns = [SparseFeat(feat, data[feat].nunique())
+    #                           for feat in sparse_features] + [DenseFeat(feat, 1, )
+    #                                                           for feat in dense_features]
+    fixlen_feature_columns = [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
+                              for feat in sparse_features] + [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
     fixlen_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].max() + 1, embedding_dim=4)
                               for feat in sparse_features] + [DenseFeat(feat, 1, )
                                                               for feat in dense_features]
-
     dnn_feature_columns = fixlen_feature_columns
     linear_feature_columns = fixlen_feature_columns
 
