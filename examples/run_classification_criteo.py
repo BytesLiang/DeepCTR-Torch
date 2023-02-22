@@ -3,14 +3,14 @@ import pandas as pd
 import torch
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler, KBinsDiscretizer
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 
 from deepctr_torch.inputs import SparseFeat, DenseFeat, get_feature_names
 from deepctr_torch.models import *
 
 if __name__ == "__main__":
-    # data = pd.read_csv('./criteo_sample.txt')
-    data = pd.read_csv('../dataset/criteo_sampled_data.csv')
+    data = pd.read_csv('./criteo_sample.txt')
+
     sparse_features = ['C' + str(i) for i in range(1, 27)]
     dense_features = ['I' + str(i) for i in range(1, 14)]
 
@@ -39,6 +39,8 @@ if __name__ == "__main__":
     #                                                           for feat in dense_features]
     fixlen_feature_columns = [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
                               for feat in sparse_features] + [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
+    fixlen_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].max() + 1, embedding_dim=4)
+                              for feat in sparse_features] + [DenseFeat(feat, 1, )
                                                               for feat in dense_features]
     dnn_feature_columns = fixlen_feature_columns
     linear_feature_columns = fixlen_feature_columns
