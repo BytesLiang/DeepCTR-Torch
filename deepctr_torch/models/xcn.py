@@ -1,18 +1,18 @@
 # -*- coding:utf-8 -*-
-"""
+'''
 Author:
-    liangxinzhu
+    Runlong Yu, Zihan Wang
 Reference:
-    [1] Runlong Yu, Yuyang Ye, Qi Liu, Zihan Wang, Chunfeng Yang, Yucheng Hu, and Enhong Chen. XCrossNet:
-     Feature Structure-Oriented Learning for Click-Through Rate Prediction. In: PAKDD. (2021)
-"""
+    [1] Runlong Yu, Yuyang Ye, Qi Liu, Zihan Wang, Chunfeng Yang, Yucheng Hu, and Enhong Chen. XCrossNet: Feature Structure-Oriented Learning for Click-Through Rate Prediction. In: PAKDD. (2021)
+'''
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from layers import concat_fun
 from .basemodel import BaseModel
 from ..inputs import combined_dnn_input, DenseFeat
-from ..layers import DNN, InnerProductLayer, OutterProductLayer
+from ..layers import DNN, concat_fun, InnerProductLayer, OutterProductLayer
 
 
 class XCN(BaseModel):
@@ -35,8 +35,8 @@ class XCN(BaseModel):
     """
 
     def __init__(self, dnn_feature_columns, embedding_size=8, dnn_hidden_units=(128, 128), l2_reg_embedding=1e-5,
-                 l2_reg_dnn=0, cross_num=3, use_linear=False, use_cross=False,
-                 init_std=0.0001, seed=1024, dnn_dropout=0, dnn_activation=F.relu, use_inner=True, use_outter=False,
+                 l2_reg_dnn=0, cross_num=3, use_linear=True, use_cross=True,
+                 init_std=0.0001, seed=1024, dnn_dropout=0, dnn_activation='relu', use_inner=True, use_outter=False,
                  kernel_type='mat', task='binary', device='cpu', ):
 
         super(XCN, self).__init__(dnn_feature_columns if use_linear else [], dnn_feature_columns,
@@ -56,7 +56,7 @@ class XCN(BaseModel):
         self.use_cross = use_cross
 
         product_out_dim = 0
-        num_inputs = self.compute_input_dim(dnn_feature_columns, embedding_size, include_dense=False,
+        num_inputs = self.compute_input_dim(dnn_feature_columns, include_dense=False,
                                             feature_group=True)
         num_pairs = int(num_inputs * (num_inputs - 1) / 2)
 
@@ -99,24 +99,19 @@ class XCN(BaseModel):
                                                                                   self.embedding_dict)
         linear_signal = torch.flatten(
             concat_fun(sparse_embedding_list), start_dim=1)
+        product_layer = linear_signal
 
         if self.use_inner:
             inner_product = torch.flatten(
                 self.inner_product(sparse_embedding_list), start_dim=1)
-
+            product_layer = torch.cat(
+                [product_layer, inner_product], dim=1)
         # product part
         if self.use_outter:
             outer_product = self.outter_product(sparse_embedding_list)
-
-        if self.use_outter and self.use_inner:
             product_layer = torch.cat(
-                [linear_signal, inner_product, outer_product], dim=1)
-        elif self.use_outter:
-            product_layer = torch.cat([linear_signal, outer_product], dim=1)
-        elif self.use_inner:
-            product_layer = torch.cat([linear_signal, inner_product], dim=1)
-        else:
-            product_layer = linear_signal
+                [product_layer, outer_product], dim=1)
+
         dnn_input = combined_dnn_input([product_layer], [])
 
         # cross part

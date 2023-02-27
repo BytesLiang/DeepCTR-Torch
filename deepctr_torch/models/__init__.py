@@ -17,7 +17,9 @@ from .dien import DIEN
 from .din import DIN
 from .afn import AFN
 from .multitask import SharedBottom, ESMM, MMOE, PLE
-from .fm import FM
 from .edcn import EDCN
+from .dcnad import DCNAD
+from .xcn import XCN
+from .edcn import EDCN
+from .deepfmad import DeepFMAd
 
-from .multitask import SharedBottom, ESMM, MMOE, PLE

@@ -10,11 +10,12 @@ import torch.nn as nn
 
 from .basemodel import BaseModel
 from ..inputs import combined_dnn_input
-from ..layers import FM, DNN
+from ..layers import FM, DNN, AutoDisLayer
 
 
-class DeepFM(BaseModel):
+class DeepFMAd(BaseModel):
     """Instantiates the DeepFM Network architecture.
+
     :param linear_feature_columns: An iterable containing all the features used by linear part of the model.
     :param dnn_feature_columns: An iterable containing all the features used by deep part of the model.
     :param use_fm: bool,use FM part or not
@@ -31,6 +32,7 @@ class DeepFM(BaseModel):
     :param device: str, ``"cpu"`` or ``"cuda:0"``
     :param gpus: list of int or torch.device for multiple gpus. If None, run on `device`. `gpus[0]` should be the same gpu with `device`.
     :return: A PyTorch model instance.
+
     """
 
     def __init__(self,
@@ -40,7 +42,7 @@ class DeepFM(BaseModel):
                  dnn_dropout=0,
                  dnn_activation='relu', dnn_use_bn=False, task='binary', device='cpu', gpus=None):
 
-        super(DeepFM, self).__init__(linear_feature_columns, dnn_feature_columns, l2_reg_linear=l2_reg_linear,
+        super(DeepFMAd, self).__init__(linear_feature_columns, dnn_feature_columns, l2_reg_linear=l2_reg_linear,
                                      l2_reg_embedding=l2_reg_embedding, init_std=init_std, seed=seed, task=task,
                                      device=device, gpus=gpus)
 
@@ -51,7 +53,7 @@ class DeepFM(BaseModel):
             self.fm = FM()
 
         if self.use_dnn:
-            self.dnn = DNN(self.compute_input_dim(dnn_feature_columns), dnn_hidden_units,
+            self.dnn = DNN(39*4, dnn_hidden_units,
                            activation=dnn_activation, l2_reg=l2_reg_dnn, dropout_rate=dnn_dropout, use_bn=dnn_use_bn,
                            init_std=init_std, device=device)
             self.dnn_linear = nn.Linear(
@@ -60,6 +62,7 @@ class DeepFM(BaseModel):
             self.add_regularization_weight(
                 filter(lambda x: 'weight' in x[0] and 'bn' not in x[0], self.dnn.named_parameters()), l2=l2_reg_dnn)
             self.add_regularization_weight(self.dnn_linear.weight, l2=l2_reg_dnn)
+        self.autodis = AutoDisLayer(13, 4, H=30, alpha=0.01, tau=1e-3)
         self.to(device)
 
     def forward(self, X):
@@ -68,13 +71,16 @@ class DeepFM(BaseModel):
                                                                                   self.embedding_dict)
         logit = self.linear_model(X)
 
-        if self.use_fm and len(sparse_embedding_list) > 0:
-            fm_input = torch.cat(sparse_embedding_list, dim=1)
+        dense_embedding_list = self.autodis(torch.stack(dense_value_list, dim=1)) # torch.stack(dense_value_list, dim=1):(B, F, 1)
+        dnn_input = combined_dnn_input(sparse_embedding_list, dense_embedding_list)
+        embedding_list = sparse_embedding_list + dense_embedding_list
+        if self.use_fm and len(embedding_list) > 0:
+            fm_input = torch.cat(embedding_list, dim=1)
             logit += self.fm(fm_input)
 
         if self.use_dnn:
-            dnn_input = combined_dnn_input(
-                sparse_embedding_list, dense_value_list)
+            # dnn_input = combined_dnn_input(
+            #     sparse_embedding_list, dense_value_list)
             dnn_output = self.dnn(dnn_input)
             dnn_logit = self.dnn_linear(dnn_output)
             logit += dnn_logit

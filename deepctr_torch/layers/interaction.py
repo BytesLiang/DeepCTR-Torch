@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .activation import activation_layer
-from .core import Conv2dSame
+from .core import Conv2dSame, DNN
 from .sequence import KMaxPooling
 
 
@@ -865,18 +865,18 @@ class RegulationModule(nn.Module):
 
 
 class AutoDisLayer(nn.Module):
-    def __init__(self, field_num, embedding_dim=10, H=20, alpha=0.1, tau=1, use_bn=False):
+    def __init__(self, field_num, embedding_dim=10, H=20, alpha=0.1, tau=0.1, use_bn=False):
         super(AutoDisLayer, self).__init__()
         self.field_num = field_num
         self.use_bn = use_bn
         self.auto_dis = nn.ModuleList([AutomaticDiscretization(H, alpha, tau, use_bn)
                                        for _ in range(field_num)])
-        self.ME = nn.Parameter(torch.randn(field_num, H, embedding_dim))
+        self.ME = nn.ParameterList([nn.Parameter(torch.randn(H, embedding_dim)) for _ in range(field_num)])
 
     def forward(self, x):
-        emb_list = [torch.matmul(self.auto_dis[i](x[:, i]), self.ME[i]) for i in range(self.field_num)]
-        emb = torch.cat(emb_list, dim=-1)
-        return emb
+        emb_list = [torch.unsqueeze(torch.matmul(self.auto_dis[i](x[:, i]), self.ME[i]), dim=1) for i in range(self.field_num)]  # (B, H) * (H, E)
+        # emb = torch.cat(emb_list, dim=-1)
+        return emb_list
 
 
 class AutomaticDiscretization(nn.Module):
@@ -884,14 +884,90 @@ class AutomaticDiscretization(nn.Module):
         super(AutomaticDiscretization, self).__init__()
         self.tau = tau
         self.use_bn = use_bn
-        self.w_h = nn.Linear(1, H)
-        self.w_dis = nn.Linear(H, H)
+        self.w_h = nn.Linear(1, H, bias=False)
+        self.w_dis = nn.Linear(H, H, bias=False)
         self.leak_relu = nn.LeakyReLU()
         self.alpha = alpha
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x):
-        h = self.leak_relu(self.w_h(x))
-        x_hat = self.w_dis(h) + self.alpha * h
-        x_hat_h = self.softmax(x_hat / self.tau)
+    def forward(self, x): # x: (B, 1)
+        h = self.leak_relu(self.w_h(x)) # h:(B, h)
+        x_hat = self.w_dis(h) + self.alpha * h  # x_hat:(B, h)
+        x_hat_h = self.softmax(x_hat / self.tau) # x_hat_h:(B, h)
         return x_hat_h
+
+
+class FRNet(nn.Module):
+    def __init__(self, field_num, embed_dim, weight_type="bit", mlp_hidden_units=(256, 256), att_size=10):
+        super(FRNet, self).__init__()
+        # IEU_G computes complementary features.
+        self.IEU_G = IEU(field_num, embed_dim, weight_type="bit", mlp_hidden_units=mlp_hidden_units,
+                         att_size=att_size)
+
+        # IEU_W computes bit-level or vector-level weights.
+        self.IEU_W = IEU(field_num, embed_dim, weight_type=weight_type, mlp_hidden_units=mlp_hidden_units,
+                         att_size=att_size)
+
+    def forward(self, x):
+        com_feature = self.IEU_G(x)
+        wegiht_matrix = torch.sigmoid(self.IEU_W(x))
+        # CSGate
+        x_out = x * wegiht_matrix + com_feature * (torch.tensor(1.0) - wegiht_matrix)
+        return x_out
+
+
+class IEU(nn.Module):
+    def __init__(self, field_num, embedding_dim=10, weight_type="bit", mlp_hidden_units=(256, 256), att_size=10,
+                 use_bn=False):
+        super(IEU, self).__init__()
+        self.field_num = field_num
+        self.weight_type = weight_type
+        self.use_bn = use_bn
+        self.input_dim = field_num * embedding_dim
+
+        self.vector_info = SelfAttentionIEU(embedding_dim, att_size)
+
+        self.mlps = DNN(self.input_dim, mlp_hidden_units, use_bn=use_bn)
+        self.bit_projection = nn.Linear(mlp_hidden_units[-1], embedding_dim)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        # self-attetnion unit
+        x_vector = self.vector_info(x)  # B,F,E
+
+        # CIE unit
+        x_bit = self.mlps(x.view(-1, self.input_dim))
+        x_bit = self.bit_projection(x_bit).unsqueeze(1)  # B,1,e
+        x_bit = self.activation(x_bit)
+
+        # integration unit
+        x_out = x_bit * x_vector
+
+        if self.weight_type == "vector":
+            # To compute vector-level importance in IEU_W
+            x_out = torch.sum(x_out, dim=2, keepdim=True)
+            # B,F,1
+            return x_out
+
+        return x_out
+
+
+class SelfAttentionIEU(nn.Module):
+    def __init__(self, embedding_dim, att_size=20):
+        super(SelfAttentionIEU, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.trans_Q = nn.Parameter(torch.randn(embedding_dim, att_size))
+        self.trans_K = nn.Parameter(torch.randn(embedding_dim, att_size))
+        self.trans_V = nn.Parameter(torch.randn(embedding_dim, att_size))
+        self.projection = nn.Linear(att_size, embedding_dim)
+
+    def forward(self, x):
+        Q = torch.matmul(x, self.trans_Q)
+        K = torch.matmul(x, self.trans_K)
+        V = torch.matmul(x, self.trans_V)
+
+        attention = torch.matmul(Q, K.permute(0, 2, 1))
+        attention_score = F.softmax(attention, dim=-1)
+        context = torch.matmul(attention_score, V)
+        context = self.projection(context)
+        return context

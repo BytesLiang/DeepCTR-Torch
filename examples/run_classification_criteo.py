@@ -10,6 +10,7 @@ from deepctr_torch.models import *
 
 if __name__ == "__main__":
     data = pd.read_csv('./criteo_sample.txt')
+    # data = pd.read_csv('./criteo_sampled_data.csv')
 
     sparse_features = ['C' + str(i) for i in range(1, 27)]
     dense_features = ['I' + str(i) for i in range(1, 14)]
@@ -31,10 +32,7 @@ if __name__ == "__main__":
     #                           for feat in sparse_features] + [DenseFeat(feat, 1, )
     #                                                           for feat in dense_features]
     fixlen_feature_columns = [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
-                              for feat in sparse_features] + [SparseFeat(feat, data[feat].nunique(), embedding_dim=10)
-    fixlen_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].max() + 1, embedding_dim=4)
-                              for feat in sparse_features] + [DenseFeat(feat, 1, )
-                                                              for feat in dense_features]
+                              for feat in sparse_features]
     dnn_feature_columns = fixlen_feature_columns
     linear_feature_columns = fixlen_feature_columns
 
@@ -55,14 +53,14 @@ if __name__ == "__main__":
         print('cuda ready...')
         device = 'cuda:0'
 
-    model = DeepFM(linear_feature_columns=linear_feature_columns, dnn_feature_columns=dnn_feature_columns,
-                   task='binary',
-                   l2_reg_embedding=1e-5, device=device)
+    model = AutoInt(dnn_feature_columns=dnn_feature_columns, linear_feature_columns=linear_feature_columns,
+                task='binary',
+                l2_reg_embedding=1e-5, device=device)
 
     model.compile("adagrad", "binary_crossentropy",
                   metrics=["binary_crossentropy", "auc"], )
 
-    history = model.fit(train_model_input, train[target].values, batch_size=32, epochs=10, verbose=2,
+    history = model.fit(train_model_input, train[target].values, batch_size=1024, epochs=10, verbose=1,
                         validation_split=0.2)
     pred_ans = model.predict(test_model_input, 256)
     print("")
